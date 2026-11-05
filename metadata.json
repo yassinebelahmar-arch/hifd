@@ -1,0 +1,6 @@
+{
+  "name": "Tartil & Hifdh — Mémorisation du Coran (Yasser Al-Dosari)",
+  "description": "Plateforme professionnelle de mémorisation du Coran (Riwayat Hafs 'an 'Asim) avec Cheikh Yasser Al-Dosari, parcours inversé (Juz 30 vers 1), système de Double Check, Tafsir Al-Muyassar et planification 3h/semaine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
