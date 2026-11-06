@@ -198,3 +198,25 @@ test('Mushaf pagination and focused word/phrase Tafsir popup extraction work acc
   assert.ok(focused.phraseTranslationFr.includes('royauté'));
 });
 
+test('Weekly session portion labels (1/8 Hizb, 1/4 Hizb, 1 or 2 Surahs) and Arabic projection formatting work accurately', async () => {
+  const {
+    getPortionLabelBilingual,
+    formatProjectionArabic,
+    toArabicDigits,
+    createDefaultPlannedWeeklySessions,
+  } = await import('./hifdhLogic');
+
+  assert.equal(toArabicDigits(114), '١١٤');
+  assert.equal(getPortionLabelBilingual('1_8_hizb').shortFr, '1/8 Hizb');
+  assert.equal(getPortionLabelBilingual('1_4_hizb').shortFr, '1/4 Hizb');
+  assert.equal(getPortionLabelBilingual('1_surah').shortFr, '1 Sourate');
+  assert.equal(getPortionLabelBilingual('2_surahs').shortFr, '2 Sourates');
+  assert.ok(formatProjectionArabic(2, 3, 1).includes('سنتان'));
+
+  const defaults = createDefaultPlannedWeeklySessions();
+  assert.ok(defaults.length >= 3);
+  assert.equal(defaults[0].dayName, 'Lundi');
+  assert.equal(defaults[0].plannedDurationMinutes, 90);
+});
+
+

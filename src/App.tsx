@@ -13,6 +13,7 @@ import { ALL_HALF_HIZBS } from './data/quranMetadata';
 import {
   HifdhSessionLog,
   HifdhState,
+  PlannedWeeklySession,
   WeeklyScheduleConfig,
   applyCheck1Toggle,
   applyCheck2Toggle,
@@ -163,6 +164,13 @@ export default function App() {
         ...prev.schedule,
         ...patch,
       },
+    }));
+  };
+
+  const handleUpdatePlannedSessions = (plannedWeeklySessions: PlannedWeeklySession[]) => {
+    setState((prev) => ({
+      ...prev,
+      plannedWeeklySessions,
     }));
   };
 
@@ -402,8 +410,11 @@ export default function App() {
             state={state}
             reminders={reminders}
             onUpdateSchedule={handleUpdateSchedule}
+            onUpdatePlannedSessions={handleUpdatePlannedSessions}
             onAddSession={handleAddSession}
             onDeleteSession={handleDeleteSession}
+            onToggleSurahCheck1={handleToggleSurahCheck1}
+            onToggleSurahCheck2={handleToggleSurahCheck2}
             onToggleHalfHizbCheck2={handleToggleHalfHizbCheck2}
             onOpenReaderForSurah={handleOpenReaderForSurah}
             onOpenHifdhMushafForSurah={handleOpenHifdhMushafForSurah}

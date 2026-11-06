@@ -36,12 +36,36 @@ export interface FlaggedVerseItem {
   createdAt: string;
 }
 
+export type SessionPortionType =
+  | '1_8_hizb'
+  | '1_4_hizb'
+  | '1_2_hizb'
+  | '1_surah'
+  | '2_surahs';
+
+export interface PlannedWeeklySession {
+  id: string;
+  dayName: string; // 'Lundi' | 'Mardi' | 'Mercredi' | 'Jeudi' | 'Vendredi' | 'Samedi' | 'Dimanche'
+  plannedDurationMinutes: number; // e.g., 90 (1h30), 60 (1h00), 45
+  goalType: 'revision' | 'memorization' | 'both';
+  portionType: SessionPortionType;
+  primarySurahNumber: number;
+  secondarySurahNumber?: number;
+  hizbNumber?: number;
+  customNote?: string;
+  status: 'planned' | 'completed';
+  completedAtIso?: string | null;
+  actualDurationMinutes?: number;
+  postSessionNote?: string;
+}
+
 export interface HifdhState {
   halfHizbProgress: Record<number, CheckProgressItem>; // key: 1..120
   surahProgress: Record<number, CheckProgressItem>; // key: 1..114
   sessions: HifdhSessionLog[];
   schedule: WeeklyScheduleConfig;
   flaggedVerses?: Record<string, FlaggedVerseItem>;
+  plannedWeeklySessions?: PlannedWeeklySession[];
 }
 
 export interface HifdhComputedStats {
@@ -900,11 +924,110 @@ export function createInitialHifdhState(): HifdhState {
     schedule: {
       weeklyHoursTarget: 3,
       sessionsPerWeek: 3,
-      selectedDays: ['Mardi', 'Jeudi', 'Dimanche'],
+      selectedDays: ['Lundi', 'Jeudi', 'Dimanche'],
       reminderTime: '20:00',
       weeklyHizbPace: 0.5,
       consolidationDelayDays: 5,
       directionOrder: 'reverse_juz',
     },
+    plannedWeeklySessions: createDefaultPlannedWeeklySessions(),
   };
+}
+
+const ARABIC_INDIC_DIGITS = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+
+export function toArabicDigits(value: number | string): string {
+  return String(value)
+    .split('')
+    .map((ch) => (ch >= '0' && ch <= '9' ? ARABIC_INDIC_DIGITS[Number(ch)] : ch))
+    .join('');
+}
+
+export function formatProjectionArabic(
+  years: number,
+  months: number,
+  extraWeeks: number
+): string {
+  if (years === 0 && months === 0 && extraWeeks === 0) {
+    return 'تم ختم القرآن الكريم بحمد الله';
+  }
+  const parts: string[] = [];
+  if (years > 0) {
+    if (years === 1) parts.push('سنة واحدة');
+    else if (years === 2) parts.push('سنتان');
+    else parts.push(`${toArabicDigits(years)} سنوات`);
+  }
+  if (months > 0) {
+    if (months === 1) parts.push('شهر واحد');
+    else if (months === 2) parts.push('شهران');
+    else if (months <= 10) parts.push(`${toArabicDigits(months)} أشهر`);
+    else parts.push(`${toArabicDigits(months)} شهراً`);
+  }
+  if (extraWeeks > 0) {
+    if (extraWeeks === 1) parts.push('أسبوع واحد');
+    else if (extraWeeks === 2) parts.push('أسبوعان');
+    else parts.push(`${toArabicDigits(extraWeeks)} أسابيع`);
+  }
+  return parts.join(' و ');
+}
+
+export function getPortionLabelBilingual(portionType: SessionPortionType): {
+  fr: string;
+  ar: string;
+  shortFr: string;
+} {
+  switch (portionType) {
+    case '1_8_hizb':
+      return { fr: '1/8 Hizb (Thumun)', ar: 'ثمن حزب (١/٨)', shortFr: '1/8 Hizb' };
+    case '1_4_hizb':
+      return { fr: '1/4 Hizb (Rubu’)', ar: 'ربع حزب (١/٤)', shortFr: '1/4 Hizb' };
+    case '1_2_hizb':
+      return { fr: '1/2 Hizb (Nisf)', ar: 'نصف حزب (١/٢)', shortFr: '1/2 Hizb' };
+    case '1_surah':
+      return { fr: '1 Sourate', ar: 'سورة واحدة (١)', shortFr: '1 Sourate' };
+    case '2_surahs':
+      return { fr: '2 Sourates', ar: 'سورتان (٢)', shortFr: '2 Sourates' };
+  }
+}
+
+export function createDefaultPlannedWeeklySessions(): PlannedWeeklySession[] {
+  return [
+    {
+      id: 'plan-lundi',
+      dayName: 'Lundi',
+      plannedDurationMinutes: 90,
+      goalType: 'revision',
+      portionType: '1_surah',
+      primarySurahNumber: 67, // Sourate Al-Mulk
+      hizbNumber: 57,
+      customNote: 'Réviser Sourate Al-Mulk en entier + écoute Cheikh Yasser Al-Dosari pour valider le 2ème Check',
+      status: 'planned',
+    },
+    {
+      id: 'plan-jeudi',
+      dayName: 'Jeudi',
+      plannedDurationMinutes: 60,
+      goalType: 'memorization',
+      portionType: '1_4_hizb',
+      primarySurahNumber: 78, // Sourate An-Naba
+      hizbNumber: 59,
+      customNote: 'Mémoriser 1/4 de Hizb (Sourate An-Naba) avec répétition et liaison',
+      status: 'planned',
+    },
+    {
+      id: 'plan-dimanche',
+      dayName: 'Dimanche',
+      plannedDurationMinutes: 30,
+      goalType: 'revision',
+      portionType: '2_surahs',
+      primarySurahNumber: 87, // Sourate Al-A'la
+      secondarySurahNumber: 88, // Sourate Al-Ghashiyah
+      hizbNumber: 60,
+      customNote: 'Révision consolidée de 2 sourates du Hizb 60 en mode Mushaf masqué',
+      status: 'completed',
+      completedAtIso: new Date('2026-10-30T19:30:00Z').toISOString(),
+      actualDurationMinutes: 35,
+      postSessionNote: 'Très fluide, aucune hésitation sur Al-A’la et Al-Ghashiyah.',
+    },
+  ];
 }

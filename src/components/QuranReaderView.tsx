@@ -28,7 +28,6 @@ import {
   buildSurahQuizPrompt,
   computeNextVersePlaybackState,
   getArabicFirstWordsHint,
-  getOrderedJuzNumbers,
 } from '../utils/hifdhLogic';
 
 interface QuranReaderViewProps {
@@ -135,17 +134,12 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
   );
 
   const orderedJuzList = useMemo(
-    () => getOrderedJuzNumbers(state.schedule.directionOrder),
-    [state.schedule.directionOrder]
+    () => Array.from({ length: 30 }, (_, i) => i + 1),
+    []
   );
 
   const filteredSurahs = useMemo(() => {
-    const ordered = [...ALL_SURAHS].sort((a, b) => {
-      const idxA = orderedJuzList.indexOf(a.juzStart);
-      const idxB = orderedJuzList.indexOf(b.juzStart);
-      if (idxA !== idxB) return idxA - idxB;
-      return a.number - b.number;
-    });
+    const ordered = [...ALL_SURAHS].sort((a, b) => a.number - b.number);
 
     return ordered.filter((s) => {
       if (selectedJuzFilter !== 'all' && s.juzStart !== selectedJuzFilter) return false;
@@ -158,7 +152,7 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
         String(s.number) === q
       );
     });
-  }, [orderedJuzList, selectedJuzFilter, surahSearch]);
+  }, [selectedJuzFilter, surahSearch]);
 
   const currentVerse: VerseDetail | undefined = verses[currentAyahIndex];
 
