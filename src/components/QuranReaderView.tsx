@@ -10,8 +10,6 @@ import {
   Play,
   Search,
   Shuffle,
-  SkipBack,
-  SkipForward,
   Square,
   Volume2,
 } from 'lucide-react';
@@ -20,20 +18,20 @@ import {
   ALL_SURAHS,
   SurahMeta,
   VerseDetail,
-  getYasserDosariSurahAudioUrl,
 } from '../data/quranMetadata';
 import { fetchSurahVersesWithTafsir } from '../services/quranApi';
 import {
   HifdhState,
   buildSurahQuizPrompt,
-  computeNextVersePlaybackState,
   getArabicFirstWordsHint,
 } from '../utils/hifdhLogic';
+import { SharedAudioController } from './GlobalAudioPlayerBar';
 
 interface QuranReaderViewProps {
   state: HifdhState;
   selectedSurahNumber: number;
   initialSubTab?: 'mushaf' | 'tafsir' | 'quiz';
+  audioController: SharedAudioController;
   onSelectSurah: (surahNumber: number) => void;
   onToggleSurahCheck1: (surahNumber: number) => void;
   onToggleSurahCheck2: (surahNumber: number) => void;
@@ -46,11 +44,33 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
   state,
   selectedSurahNumber,
   initialSubTab = 'mushaf',
+  audioController,
   onSelectSurah,
   onToggleHalfHizbCheck1,
   onToggleHalfHizbCheck2,
   onToggleFlaggedVerse,
 }) => {
+  const {
+    isPlaying,
+    audioMode,
+    playingSurahNumber,
+    currentAyahIndex,
+    echoPauseMode,
+    isEchoWaiting,
+    rangeStart,
+    rangeEnd,
+    loopRange,
+    togglePlaySurah,
+    playSpecificAyah,
+    togglePlayPause,
+    setEchoPauseMode,
+    setRangeStart,
+    setRangeEnd,
+    setLoopRange,
+  } = audioController;
+
+  const isPlayingThisSurah = playingSurahNumber === selectedSurahNumber;
+
   const [activeSubTab, setActiveSubTab] = useState<'mushaf' | 'tafsir' | 'quiz'>(initialSubTab);
   const [verses, setVerses] = useState<VerseDetail[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -63,27 +83,7 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
   const [showFrenchUnderMushaf, setShowFrenchUnderMushaf] = useState<boolean>(true);
   const [inlineTafsirAyah, setInlineTafsirAyah] = useState<number | null>(null);
   const [onlyFlaggedFilter, setOnlyFlaggedFilter] = useState<boolean>(false);
-
-  // Audio Player State (Sheikh Yasser Al-Dosari)
-  const [audioMode, setAudioMode] = useState<'ayah' | 'surah'>('ayah');
-  const [currentAyahIndex, setCurrentAyahIndex] = useState<number>(0);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [repeatMode, setRepeatMode] = useState<1 | 3 | 5 | 0>(1);
-  const [currentRepeatIteration, setCurrentRepeatIteration] = useState<number>(1);
-  const [playbackRate, setPlaybackRate] = useState<number>(1);
-  const [rangeStart, setRangeStart] = useState<number>(1);
-  const [rangeEnd, setRangeEnd] = useState<number>(1);
-  const [loopRange, setLoopRange] = useState<boolean>(false);
   const [showRangeControls, setShowRangeControls] = useState<boolean>(false);
-
-  // Echo Mode (Wait 4s after each verse so user can repeat aloud)
-  const [echoPauseMode, setEchoPauseMode] = useState<boolean>(false);
-  const [isEchoWaiting, setIsEchoWaiting] = useState<boolean>(false);
-  const echoTimeoutRef = useRef<number | null>(null);
-
-  // Audio timeline state
-  const [audioCurrentTime, setAudioCurrentTime] = useState<number>(0);
-  const [audioDuration, setAudioDuration] = useState<number>(0);
 
   // Quiz & Voice Comparator state
   const [quizIndex, setQuizIndex] = useState<number>(0);
@@ -94,9 +94,6 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const preloadAudioRef = useRef<HTMLAudioElement | null>(null);
-
   useEffect(() => {
     setActiveSubTab(initialSubTab);
   }, [initialSubTab]);
@@ -104,10 +101,6 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-    setIsPlaying(false);
-    setIsEchoWaiting(false);
-    setCurrentAyahIndex(0);
-    setCurrentRepeatIteration(1);
     setRevealedVerses({});
     setInlineTafsirAyah(null);
     setOnlyFlaggedFilter(false);
@@ -115,8 +108,10 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
     fetchSurahVersesWithTafsir(selectedSurahNumber).then((res) => {
       if (!mounted) return;
       setVerses(res.verses);
-      setRangeStart(1);
-      setRangeEnd(res.verses.length || 1);
+      if (!isPlaying) {
+        setRangeStart(1);
+        setRangeEnd(res.verses.length || 1);
+      }
       setQuizIndex(0);
       setQuizRevealed(false);
       setLoading(false);
@@ -124,7 +119,6 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
 
     return () => {
       mounted = false;
-      if (echoTimeoutRef.current) window.clearTimeout(echoTimeoutRef.current);
     };
   }, [selectedSurahNumber]);
 
@@ -154,96 +148,8 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
     });
   }, [selectedJuzFilter, surahSearch]);
 
-  const currentVerse: VerseDetail | undefined = verses[currentAyahIndex];
-
-  const activeAudioSrc = useMemo(() => {
-    if (audioMode === 'surah') {
-      return getYasserDosariSurahAudioUrl(selectedSurahNumber);
-    }
-    return currentVerse?.audioVerseUrl || '';
-  }, [audioMode, selectedSurahNumber, currentVerse]);
-
-  // Gapless preloading of verse N+1
-  useEffect(() => {
-    if (audioMode !== 'ayah' || verses.length === 0) return;
-    const nextIdx = currentAyahIndex + 1;
-    if (nextIdx < verses.length && preloadAudioRef.current) {
-      const nextUrl = verses[nextIdx]?.audioVerseUrl;
-      if (nextUrl && preloadAudioRef.current.src !== nextUrl) {
-        preloadAudioRef.current.src = nextUrl;
-        preloadAudioRef.current.load();
-      }
-    }
-  }, [audioMode, currentAyahIndex, verses]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !activeAudioSrc) return;
-
-    if (audio.src !== activeAudioSrc) {
-      audio.src = activeAudioSrc;
-      audio.playbackRate = playbackRate;
-    }
-
-    if (isPlaying && !isEchoWaiting) {
-      audio.playbackRate = playbackRate;
-      audio.play().catch(() => {
-        setIsPlaying(false);
-      });
-    } else {
-      audio.pause();
-    }
-  }, [activeAudioSrc, isPlaying, isEchoWaiting, playbackRate]);
-
-  const advanceToNextStep = () => {
-    const activeVerseNum = (currentVerse?.numberInSurah ?? currentAyahIndex + 1);
-    const nextState = computeNextVersePlaybackState({
-      activeVerse: activeVerseNum,
-      currentIteration: currentRepeatIteration,
-      repeatTarget: repeatMode,
-      rangeStart,
-      rangeEnd,
-      loopRange,
-    });
-
-    if (nextState.shouldReplaySameVerse && nextState.shouldContinuePlaying && audioRef.current) {
-      setCurrentRepeatIteration(nextState.nextIteration);
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(() => setIsPlaying(false));
-    } else {
-      setCurrentAyahIndex(Math.max(0, nextState.nextVerse - 1));
-      setCurrentRepeatIteration(nextState.nextIteration);
-      setIsPlaying(nextState.shouldContinuePlaying);
-    }
-  };
-
-  const handleAudioEnded = () => {
-    if (audioMode === 'surah') {
-      setIsPlaying(false);
-      return;
-    }
-
-    if (echoPauseMode) {
-      setIsEchoWaiting(true);
-      if (echoTimeoutRef.current) window.clearTimeout(echoTimeoutRef.current);
-      echoTimeoutRef.current = window.setTimeout(() => {
-        setIsEchoWaiting(false);
-        advanceToNextStep();
-      }, 4000);
-      return;
-    }
-
-    advanceToNextStep();
-  };
-
-  const playSpecificAyah = (index: number) => {
-    if (echoTimeoutRef.current) window.clearTimeout(echoTimeoutRef.current);
-    setIsEchoWaiting(false);
-    setAudioMode('ayah');
-    setCurrentAyahIndex(index);
-    setCurrentRepeatIteration(1);
-    setIsPlaying(true);
-  };
+  const currentVerse: VerseDetail | undefined =
+    verses[isPlayingThisSurah ? currentAyahIndex : 0] || verses[0];
 
   const toggleRevealAyah = (ayahNum: number) => {
     setRevealedVerses((prev) => ({
@@ -309,13 +215,6 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
     () => buildSurahQuizPrompt(verses, quizIndex),
     [verses, quizIndex]
   );
-
-  const formatAudioTime = (sec: number) => {
-    if (!sec || !Number.isFinite(sec)) return '00:00';
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pb-28">
@@ -469,17 +368,10 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => {
-                  if (audioMode === 'surah' && isPlaying) {
-                    setIsPlaying(false);
-                  } else {
-                    setAudioMode('surah');
-                    setIsPlaying(true);
-                  }
-                }}
+                onClick={() => togglePlaySurah(selectedSurahNumber)}
                 className="px-3 py-1.5 text-xs font-semibold theme-btn-primary rounded-md flex items-center gap-1.5 cursor-pointer"
               >
-                {audioMode === 'surah' && isPlaying ? (
+                {isPlayingThisSurah && audioMode === 'surah' && isPlaying ? (
                   <>
                     <Pause className="w-3.5 h-3.5" />
                     <span>Pause</span>
@@ -659,7 +551,8 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
             <div className="divide-y theme-border">
               {displayedVerses.map((v) => {
                 const actualIdx = verses.findIndex((item) => item.numberInSurah === v.numberInSurah);
-                const isCurrentAyah = audioMode === 'ayah' && currentAyahIndex === actualIdx;
+                const isCurrentAyah =
+                  isPlayingThisSurah && audioMode === 'ayah' && currentAyahIndex === actualIdx;
                 const isRevealed = Boolean(revealedVerses[v.numberInSurah]);
                 const effectiveMode = isRevealed ? 'full' : hifdhVisibilityMode;
                 const isFlagged = Boolean(
@@ -686,9 +579,9 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
                             type="button"
                             onClick={() => {
                               if (isCurrentAyah && isPlaying) {
-                                setIsPlaying(false);
+                                togglePlayPause();
                               } else {
-                                playSpecificAyah(actualIdx);
+                                playSpecificAyah(selectedSurahNumber, actualIdx, verses);
                               }
                             }}
                             title="Écouter ce verset (Yasser Al-Dosari)"
@@ -842,7 +735,7 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
                   </span>
                   <button
                     type="button"
-                    onClick={() => playSpecificAyah(idx)}
+                    onClick={() => playSpecificAyah(selectedSurahNumber, idx, verses)}
                     className="px-2.5 py-1 text-xs rounded-md theme-muted border cursor-pointer flex items-center gap-1.5"
                   >
                     <Play className="w-3 h-3" />
@@ -882,7 +775,13 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => playSpecificAyah(Math.max(0, currentAyahIndex - 1))}
+                    onClick={() =>
+                      playSpecificAyah(
+                        selectedSurahNumber,
+                        Math.max(0, (isPlayingThisSurah ? currentAyahIndex : 0) - 1),
+                        verses
+                      )
+                    }
                     className="px-2.5 py-1 text-xs rounded border theme-muted cursor-pointer"
                   >
                     ← Préc.
@@ -890,7 +789,14 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
                   <button
                     type="button"
                     onClick={() =>
-                      playSpecificAyah(Math.min(verses.length - 1, currentAyahIndex + 1))
+                      playSpecificAyah(
+                        selectedSurahNumber,
+                        Math.min(
+                          verses.length - 1,
+                          (isPlayingThisSurah ? currentAyahIndex : 0) + 1
+                        ),
+                        verses
+                      )
                     }
                     className="px-2.5 py-1 text-xs rounded border theme-muted cursor-pointer"
                   >
@@ -908,7 +814,13 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => playSpecificAyah(currentAyahIndex)}
+                  onClick={() =>
+                    playSpecificAyah(
+                      selectedSurahNumber,
+                      isPlayingThisSurah ? currentAyahIndex : 0,
+                      verses
+                    )
+                  }
                   className="px-3.5 py-2 text-xs font-semibold theme-btn-primary rounded-md flex items-center gap-1.5 cursor-pointer"
                 >
                   <Volume2 className="w-3.5 h-3.5" />
@@ -996,153 +908,6 @@ export const QuranReaderView: React.FC<QuranReaderViewProps> = ({
             )}
           </div>
         )}
-      </div>
-
-      {/* Hidden Audio Elements */}
-      <audio
-        ref={audioRef}
-        onEnded={handleAudioEnded}
-        onTimeUpdate={() => {
-          if (audioRef.current) {
-            setAudioCurrentTime(audioRef.current.currentTime);
-            setAudioDuration(audioRef.current.duration || 0);
-          }
-        }}
-        onLoadedMetadata={() => {
-          if (audioRef.current) {
-            setAudioDuration(audioRef.current.duration || 0);
-          }
-        }}
-        preload="auto"
-        className="hidden"
-      />
-      <audio ref={preloadAudioRef} preload="auto" className="hidden" />
-
-      {/* Clean, Minimal Bottom Audio Player Bar */}
-      <div
-        role="region"
-        aria-label="Lecteur audio Cheikh Yasser Al-Dosari"
-        className="fixed bottom-0 left-0 right-0 z-40 theme-surface border-t px-4 py-2"
-      >
-        <div className="max-w-6xl mx-auto flex flex-col gap-1.5">
-          {/* Scrubber */}
-          <div className="flex items-center gap-2 text-[11px] font-mono-tabular theme-text-muted">
-            <span>{formatAudioTime(audioCurrentTime)}</span>
-            <input
-              type="range"
-              aria-label="Position de lecture audio"
-              min={0}
-              max={audioDuration > 0 ? audioDuration : 100}
-              step={0.1}
-              value={audioCurrentTime}
-              onChange={(e) => {
-                const nextTime = Number(e.target.value);
-                setAudioCurrentTime(nextTime);
-                if (audioRef.current) audioRef.current.currentTime = nextTime;
-              }}
-              className="flex-1 h-1 rounded-lg appearance-none cursor-pointer theme-muted accent-[var(--accent-primary)]"
-            />
-            <span>{formatAudioTime(audioDuration)}</span>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {/* Track Info */}
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="text-xs font-semibold truncate">
-                {currentSurahMeta.nameFr} ·{' '}
-                {audioMode === 'surah'
-                  ? 'Sourate complète'
-                  : `Verset ${currentVerse?.numberInSurah || 1}/${verses.length}`}
-              </span>
-              <span className="text-xs theme-text-muted hidden sm:inline">
-                (Yasser Al-Dosari)
-              </span>
-            </div>
-
-            {/* Playback Controls */}
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                aria-label="Verset précédent"
-                onClick={() => {
-                  setAudioMode('ayah');
-                  setCurrentAyahIndex((prev) => Math.max(0, prev - 1));
-                  setCurrentRepeatIteration(1);
-                }}
-                className="p-1.5 rounded border theme-muted cursor-pointer"
-              >
-                <SkipBack className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setIsPlaying((prev) => !prev)}
-                className="px-3.5 py-1.5 text-xs font-semibold theme-btn-primary rounded-md flex items-center gap-1.5 cursor-pointer"
-              >
-                {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                <span>{isPlaying ? 'Pause' : 'Lecture'}</span>
-              </button>
-
-              <button
-                type="button"
-                aria-label="Verset suivant"
-                onClick={() => {
-                  setAudioMode('ayah');
-                  setCurrentAyahIndex((prev) => Math.min(verses.length - 1, prev + 1));
-                  setCurrentRepeatIteration(1);
-                }}
-                className="p-1.5 rounded border theme-muted cursor-pointer"
-              >
-                <SkipForward className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {/* Repeat & Speed */}
-            <div className="flex items-center gap-1.5">
-              <div className="flex items-center gap-0.5 p-0.5 theme-muted border rounded-md text-[11px]">
-                {[
-                  { val: 1, label: '1x' },
-                  { val: 3, label: '3x' },
-                  { val: 5, label: '5x' },
-                  { val: 0, label: '∞' },
-                ].map((r) => (
-                  <button
-                    key={r.val}
-                    type="button"
-                    onClick={() => {
-                      setRepeatMode(r.val as any);
-                      setCurrentRepeatIteration(1);
-                    }}
-                    className={`px-2 py-0.5 rounded font-mono-tabular cursor-pointer ${
-                      repeatMode === r.val
-                        ? 'theme-surface font-semibold shadow-2xs'
-                        : 'theme-text-muted'
-                    }`}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="hidden sm:flex items-center gap-0.5 p-0.5 theme-muted border rounded-md text-[11px]">
-                {[0.85, 1, 1.15].map((spd) => (
-                  <button
-                    key={spd}
-                    type="button"
-                    onClick={() => setPlaybackRate(spd)}
-                    className={`px-1.5 py-0.5 rounded font-mono-tabular cursor-pointer ${
-                      playbackRate === spd
-                        ? 'theme-surface font-semibold shadow-2xs'
-                        : 'theme-text-muted'
-                    }`}
-                  >
-                    {spd}x
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

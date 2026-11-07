@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Check,
   ChevronDown,
@@ -9,7 +9,6 @@ import {
   EyeOff,
   Headphones,
   Pause,
-  Play,
   Volume2,
   X,
 } from 'lucide-react';
@@ -19,7 +18,6 @@ import {
   OFFLINE_SURAH_VERSES,
   SurahMeta,
   VerseDetail,
-  getYasserDosariSurahAudioUrl,
 } from '../data/quranMetadata';
 import { fetchSurahVersesWithTafsir } from '../services/quranApi';
 import {
@@ -27,10 +25,12 @@ import {
   extractFocusedWordAndPhraseExplanation,
   paginateVersesForMushaf,
 } from '../utils/hifdhLogic';
+import { SharedAudioController } from './GlobalAudioPlayerBar';
 
 interface HifdhMushafViewProps {
   state: HifdhState;
   selectedSurahNumber: number;
+  audioController: SharedAudioController;
   onSelectSurah: (surahNumber: number) => void;
   onToggleSurahCheck1: (surahNumber: number) => void;
   onToggleSurahCheck2: (surahNumber: number) => void;
@@ -55,6 +55,7 @@ function toArabicIndicDigits(num: number): string {
 export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
   state,
   selectedSurahNumber,
+  audioController,
   onSelectSurah,
   onToggleSurahCheck1,
   onToggleSurahCheck2,
@@ -74,14 +75,6 @@ export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
   // Hifdh memorization mask mode
   const [maskMode, setMaskMode] = useState<'none' | 'blur_all' | 'first_word_only'>('none');
   const [revealedVerses, setRevealedVerses] = useState<Record<number, boolean>>({});
-
-  // Continuous Full-Surah Audio (Sheikh Yasser Al-Dosari)
-  const [isPlayingSurah, setIsPlayingSurah] = useState<boolean>(false);
-  const [autoAdvanceNextSurah, setAutoAdvanceNextSurah] = useState<boolean>(true);
-  const [audioCurrentTime, setAudioCurrentTime] = useState<number>(0);
-  const [audioDuration, setAudioDuration] = useState<number>(0);
-  const surahAudioRef = useRef<HTMLAudioElement | null>(null);
-  const versePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Focused Word / Phrase Tafsir Popup (Only shown when clicking/double-clicking a word or verse)
   const [popupTarget, setPopupTarget] = useState<SelectedPopupTarget | null>(null);
@@ -135,40 +128,6 @@ export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
     [pages, pageIndex]
   );
 
-  const fullSurahAudioUrl = useMemo(
-    () => getYasserDosariSurahAudioUrl(selectedSurahNumber),
-    [selectedSurahNumber]
-  );
-
-  useEffect(() => {
-    const audio = surahAudioRef.current;
-    if (!audio) return;
-
-    if (audio.src !== fullSurahAudioUrl) {
-      audio.src = fullSurahAudioUrl;
-    }
-
-    if (isPlayingSurah) {
-      audio.play().catch(() => setIsPlayingSurah(false));
-    } else {
-      audio.pause();
-    }
-  }, [fullSurahAudioUrl, isPlayingSurah]);
-
-  const handleSurahAudioEnded = () => {
-    if (!autoAdvanceNextSurah) {
-      setIsPlayingSurah(false);
-      return;
-    }
-    const currentIdx = orderedSurahs.findIndex((s) => s.number === selectedSurahNumber);
-    if (currentIdx >= 0 && currentIdx + 1 < orderedSurahs.length) {
-      onSelectSurah(orderedSurahs[currentIdx + 1].number);
-      setIsPlayingSurah(true);
-    } else {
-      setIsPlayingSurah(false);
-    }
-  };
-
   const handleNextPageOrSurah = () => {
     setPopupTarget(null);
     if (pageIndex + 1 < pages.length) {
@@ -176,7 +135,7 @@ export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
-    // Move to next surah in canonical Quran order
+    // Move to next surah in canonical Quran order (audio keeps playing!)
     const currentIdx = orderedSurahs.findIndex((s) => s.number === selectedSurahNumber);
     if (currentIdx >= 0 && currentIdx + 1 < orderedSurahs.length) {
       onSelectSurah(orderedSurahs[currentIdx + 1].number);
@@ -204,14 +163,11 @@ export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
   ) => {
     e.stopPropagation();
 
-    // If user is in Hifdh mask mode and verse is not yet revealed, first click reveals the verse;
-    // clicking again (or double-clicking) opens the Tafsir popup!
     if (maskMode !== 'none' && !revealedVerses[verse.numberInSurah]) {
       setRevealedVerses((prev) => ({ ...prev, [verse.numberInSurah]: true }));
       return;
     }
 
-    // Toggle: if clicking the exact same verse/word while popup is already open, close it and return to Mushaf
     if (
       popupTarget &&
       popupTarget.verse.numberInSurah === verse.numberInSurah &&
@@ -275,13 +231,6 @@ export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
       (h) => selectedSurahNumber >= h.startSurah && selectedSurahNumber <= h.endSurah
     ) || ALL_HALF_HIZBS[112];
 
-  const formatAudioTime = (sec: number) => {
-    if (!sec || !Number.isFinite(sec)) return '00:00';
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  };
-
   const totalWordsOnPage = useMemo(
     () =>
       currentPageVerses.reduce(
@@ -291,15 +240,17 @@ export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
     [currentPageVerses]
   );
 
+  const isThisSurahPlaying =
+    audioController.isPlaying && audioController.playingSurahNumber === selectedSurahNumber;
+
   return (
     <div
       className="max-w-4xl mx-auto space-y-3.5 pb-28"
       onClick={() => {
-        // Clicking anywhere on the Mushaf background closes the Tafsir popup immediately
         if (popupTarget) setPopupTarget(null);
       }}
     >
-      {/* Top Mushaf Control Bar — Canonical Surah Order (1..114) + Density Toggle (Vrai Mushaf vs Classique) */}
+      {/* Top Mushaf Control Bar — Canonical Surah Order (1..114) + Repeat (1x 3x 5x ∞) & Speed (0.85x 1x 1.15x) + Density Toggle */}
       <div
         className="theme-surface border rounded-xl p-3 sm:p-4 space-y-2.5"
         onClick={(e) => e.stopPropagation()}
@@ -349,24 +300,77 @@ export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
             </button>
           </div>
 
-          {/* Right: 1-Click Continuous Full Surah Audio */}
-          <button
-            type="button"
-            onClick={() => setIsPlayingSurah((p) => !p)}
-            className="px-3.5 py-1.5 text-xs font-semibold theme-btn-primary rounded-lg flex items-center gap-1.5 cursor-pointer"
-          >
-            {isPlayingSurah ? (
-              <>
-                <Pause className="w-3.5 h-3.5" />
-                <span>Pause Sourate</span>
-              </>
-            ) : (
-              <>
-                <Headphones className="w-3.5 h-3.5" />
-                <span>Écouter la Sourate</span>
-              </>
-            )}
-          </button>
+          {/* Right: Repeat (1x | 3x | 5x | ∞) + Speed (0.85x | 1x | 1.15x) + 1-Click Continuous Full Surah Audio */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* Repeat Menu in Mushaf: 1x | 3x | 5x | ∞ */}
+            <div
+              role="group"
+              aria-label="Répétition dans le Mushaf"
+              className="flex items-center gap-0.5 p-0.5 theme-muted border rounded-lg text-xs"
+            >
+              {(
+                [
+                  { val: 1, label: '1x' },
+                  { val: 3, label: '3x' },
+                  { val: 5, label: '5x' },
+                  { val: 0, label: '∞' },
+                ] as const
+              ).map((r) => (
+                <button
+                  key={r.val}
+                  type="button"
+                  onClick={() => audioController.setRepeatMode(r.val)}
+                  className={`px-2 py-1 rounded font-mono-tabular cursor-pointer transition-colors ${
+                    audioController.repeatMode === r.val
+                      ? 'theme-btn-primary font-bold shadow-2xs'
+                      : 'theme-text-muted hover:text-[var(--text-main)]'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Speed Menu in Mushaf: 0.85x | 1x | 1.15x */}
+            <div
+              role="group"
+              aria-label="Vitesse dans le Mushaf"
+              className="flex items-center gap-0.5 p-0.5 theme-muted border rounded-lg text-xs"
+            >
+              {[0.85, 1, 1.15].map((spd) => (
+                <button
+                  key={spd}
+                  type="button"
+                  onClick={() => audioController.setPlaybackRate(spd)}
+                  className={`px-2 py-1 rounded font-mono-tabular cursor-pointer transition-colors ${
+                    audioController.playbackRate === spd
+                      ? 'theme-btn-primary font-bold shadow-2xs'
+                      : 'theme-text-muted hover:text-[var(--text-main)]'
+                  }`}
+                >
+                  {spd}x
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => audioController.togglePlaySurah(selectedSurahNumber)}
+              className="px-3.5 py-1.5 text-xs font-semibold theme-btn-primary rounded-lg flex items-center gap-1.5 cursor-pointer"
+            >
+              {isThisSurahPlaying ? (
+                <>
+                  <Pause className="w-3.5 h-3.5" />
+                  <span>Pause Sourate</span>
+                </>
+              ) : (
+                <>
+                  <Headphones className="w-3.5 h-3.5" />
+                  <span>Écouter la Sourate</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Second Toolbar Row: Quick Surah Jumps + Mushaf Density Toggle (Vrai Mushaf Dense vs Classique Rollback) + Masking */}
@@ -777,10 +781,11 @@ export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (versePreviewAudioRef.current) {
-                          versePreviewAudioRef.current.src = popupTarget.verse.audioVerseUrl;
-                          versePreviewAudioRef.current.play().catch(() => {});
-                        }
+                        audioController.playSpecificAyah(
+                          selectedSurahNumber,
+                          Math.max(0, popupTarget.verse.numberInSurah - 1),
+                          verses
+                        );
                       }}
                       title="Écouter ce verset"
                       className="px-2 py-1 text-xs font-medium rounded-lg theme-muted border flex items-center gap-1 cursor-pointer"
@@ -868,89 +873,6 @@ export const HifdhMushafView: React.FC<HifdhMushafViewProps> = ({
             )}
           </>
         )}
-      </div>
-
-      {/* Hidden Audio Elements */}
-      <audio
-        ref={surahAudioRef}
-        onEnded={handleSurahAudioEnded}
-        onTimeUpdate={() => {
-          if (surahAudioRef.current) {
-            setAudioCurrentTime(surahAudioRef.current.currentTime);
-            setAudioDuration(surahAudioRef.current.duration || 0);
-          }
-        }}
-        onLoadedMetadata={() => {
-          if (surahAudioRef.current) {
-            setAudioDuration(surahAudioRef.current.duration || 0);
-          }
-        }}
-        preload="auto"
-        className="hidden"
-      />
-      <audio ref={versePreviewAudioRef} preload="none" className="hidden" />
-
-      {/* Continuous Full-Surah Bottom Audio Bar */}
-      <div
-        role="region"
-        aria-label="Écoute continue de la sourate"
-        onClick={(e) => e.stopPropagation()}
-        className="fixed bottom-0 left-0 right-0 z-40 theme-surface border-t px-4 py-2.5"
-      >
-        <div className="max-w-4xl mx-auto flex flex-col gap-1.5">
-          <div className="flex items-center gap-2 text-[11px] font-mono-tabular theme-text-muted">
-            <span>{formatAudioTime(audioCurrentTime)}</span>
-            <input
-              type="range"
-              aria-label="Progression de la sourate"
-              min={0}
-              max={audioDuration > 0 ? audioDuration : 100}
-              step={0.5}
-              value={audioCurrentTime}
-              onChange={(e) => {
-                const nextTime = Number(e.target.value);
-                setAudioCurrentTime(nextTime);
-                if (surahAudioRef.current) surahAudioRef.current.currentTime = nextTime;
-              }}
-              className="flex-1 h-1 rounded-lg appearance-none cursor-pointer theme-muted accent-[var(--accent-primary)]"
-            />
-            <span>{formatAudioTime(audioDuration)}</span>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="font-semibold">
-                Sourate {currentSurahMeta.nameFr} ({currentSurahMeta.nameAr})
-              </span>
-              <span className="theme-text-muted hidden sm:inline">
-                · Récitation complète en continu (Cheikh Yasser Al-Dosari)
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsPlayingSurah((p) => !p)}
-                className="px-4 py-1.5 text-xs font-semibold theme-btn-primary rounded-md flex items-center gap-1.5 cursor-pointer"
-              >
-                {isPlayingSurah ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                <span>{isPlayingSurah ? 'Pause' : 'Écouter toute la Sourate'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setAutoAdvanceNextSurah((a) => !a)}
-                className={`px-2.5 py-1.5 text-xs rounded-md border cursor-pointer ${
-                  autoAdvanceNextSurah
-                    ? 'theme-badge-check2 font-semibold'
-                    : 'theme-muted theme-text-muted'
-                }`}
-              >
-                {autoAdvanceNextSurah ? 'Enchaîner sourates ✓' : 'Enchaîner sourates'}
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );
